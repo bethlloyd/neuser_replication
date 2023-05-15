@@ -1,0 +1,967 @@
+---
+title: "Analysis: Neuser et al (2020) replication study "
+output: html_notebook
+---=
+---
+
+Clear workspace
+
+```{r}
+rm(list= ls(all.names = TRUE))
+gc()
+```
+
+Load in libraries
+
+```{r}
+# load in libraries 
+library(ggplot2)
+library(stats)
+library(RColorBrewer)
+library(plyr)
+library(dplyr)
+library(tidyverse)
+library(BayesFactor)
+library(gridExtra)
+library(psychometric)
+library(lmerTest)
+library(viridis)
+library(sjPlot)
+library(htmltools)
+library(webshot)
+library(haven)
+library(Rmisc)
+library(tidyr)
+library(ggridges)
+library(esc)
+library(lsr)
+library(robustbase)
+```
+
+## Settings
+
+Choose which dataset to run analysis on:
+
+-   Neuser et al. original data from [OSF \| Vagus nerve stimulation boosts the drive to work for rewards](https://osf.io/58r3c/?view_only=5d1ccee7d67b464bb6f40ebe7ebc844b)
+
+-   Leiden replication data (collected 2021-2022)
+
+```{r}
+dataset_ana = 'Leiden_repl' #'Leiden_repl' / 'Neuser_orig'
+```
+
+Load in pre-processed data
+
+```{r}
+home_path = 'C:/Users/lloydb/surfdrive/ExperimentData/projects/Neuser_task/Tasks-master/Effort_Allocation_Task/Data/TUE001/Processed'
+
+if (dataset_ana == 'Neuser_orig') {
+  df <- haven::read_sav(paste(home_path, 'Neuser_orig_dat', 'Neuseretal2020_taVNS_EAT_source_file_OSF.sav', sep='/'))
+  df <- as.data.frame(df_sav)
+  print(paste('Running analysis on Neuser original data, including ', length(unique(df$ID)), ' participants!', sep=""))
+  fig_path = 'C:/Users/lloydb/surfdrive/ExperimentData/projects/Neuser_task/Tasks-master/Effort_Allocation_Task/stats/Neuser_orig_figures/'
+  
+} else if (dataset_ana == 'Leiden_repl') {
+  df <- read.csv(paste(home_path, '20230112', 'EAT_TUE001_Exp_Merg+Seg_AggrTrial_20230112.csv', sep='/'))
+ 
+  fig_path = 'C:/Users/lloydb/surfdrive/ExperimentData/projects/Neuser_task/Tasks-master/Effort_Allocation_Task/stats/Leiden_repl_figures/'
+  # remove sub 103 (only 1 session) and 129 (did not respond to too many trials)
+  df <- subset(df, Subj_ID != '103')
+  df <- subset(df, Subj_ID != '129')
+  print(paste('Running analysis on Leiden replication data, including ', length(unique(df$Subj_ID)), ' participants!', sep=""))
+}
+
+```
+
+Only for Leiden data!
+
+-   load in the session order file: [1 = tvns \> sham, 0 = sham \> tvns] and add it to dataframe
+
+-   rename some variables (all in-line with Neuser original data)
+
+-   re-code some variables (all in-line with Neuser original data)
+
+-   make 2nd level order dataset and save both files as .sav file (for HLM)
+
+```{r}
+if (dataset_ana == 'Leiden_repl') {
+  order_var <- read.csv(paste(home_path, '20230112', 'sess_Order.csv', sep='/'), sep=';')
+  df <- left_join(df, order_var, by='Subj_ID')
+  df <- df %>% 
+  rename(Food = Rew_type,
+    RewM = Rew_mag,
+    cDiff = Diff,
+    Order = sess_order,
+    RelFreq = RelEffort,
+    ID = Subj_ID, 
+    Rating_exh = R_Exh,
+    Rating_want = R_Want, 
+    SessNr = Sess_ID)
+  # re-code
+  df <- df %>%
+  mutate(RewM = case_when(RewM == 10 ~ 1,
+                          RewM == 1 ~ 0))
+  df <- df %>%
+  mutate(cDiff = case_when(cDiff == 85 ~ 1,
+                           cDiff == 75 ~ 0))
+  df <- df %>%
+  mutate(I_DRM = case_when(cDiff == 1 & RewM == 1 ~ 0.5,
+                           cDiff == 1 & RewM == 0 ~ -0.5,
+                           cDiff == 0 & RewM == 1 ~ -0.5,
+                           cDiff == 0 & RewM == 0 ~ 0.5))
+  df <- df %>%
+  mutate(I_SDiff = case_when(cDiff == 1 & StimCond == 1 ~ 0.5,
+                           cDiff == 1 & StimCond == 0 ~ -0.5,
+                           cDiff == 0 & StimCond == 1 ~ -0.5,
+                           cDiff == 0 & StimCond == 0 ~ 0.5))
+  df <- df %>%
+  mutate(I_SRewM = case_when(StimCond == 1 & RewM == 1 ~ 0.5,
+                             StimCond == 1 & RewM == 0 ~ -0.5,
+                             StimCond == 0 & RewM == 1 ~ -0.5,
+                             StimCond == 0 & RewM == 0 ~ 0.5))
+  df <- df %>%
+  mutate(I_SFood = case_when(StimCond == 1 & Food == 1 ~ 0.5,
+                             StimCond == 1 & Food == 0 ~ -0.5,
+                             StimCond == 0 & Food == 1 ~ -0.5,
+                             StimCond == 0 & Food == 0 ~ 0.5))
+  df <- df %>%
+  mutate(I_SDRM = case_when(StimCond == 1 & I_DRM == 0.5 ~ 0.5,
+                             StimCond == 1 & I_DRM == -0.5 ~ -0.5,
+                             StimCond == 0 & I_DRM == 0.5 ~ -0.5,
+                             StimCond == 0 & I_DRM == -0.5 ~ 0.5))
+  
+  df <- df %>%
+  mutate(Split_Half = case_when(Trial_ID <= 24 ~ 0,
+                             Trial_ID > 24 ~ 1))
+  
+  df <- df %>%
+  mutate(I_SSplit_Half = case_when(StimCond == 0 & Split_Half == 0 ~ 0.5,
+                             StimCond == 1 & Split_Half == 0 ~ -0.5,
+                             StimCond == 1 & Split_Half == 1 ~ 0.5,
+                             StimCond == 0 & Split_Half == 1 ~ -0.5))
+  
+  # save 2nd level variables for HLM analysis
+  #second_level_vars <- aggregate(cbind(Order)
+   #                             ~ ID, data = df, FUN = function(x) c(mn = mean(x)))
+}
+  
+  # replace the missing trial slope with the average of the session. 
+
+#write_sav(second_level_vars, paste(home_path, '/20230112/2nd_level_variable.sav', sep=''))
+#write_sav(df, paste(home_path, '/20230112/1st_level_variables_trialLevel_Neuser.sav', sep=''))
+print('saved Leiden data as .sav files !')
+```
+
+```{r}
+if (dataset_ana == 'Neuser_orig'){
+  df <- df %>%
+  mutate(Order = case_when(SessNr == 1 & StimCond == 1 ~ 1,
+                           SessNr == 2 & StimCond == 1 ~ 0,
+                           SessNr == 1 & StimCond == 0 ~ 0,
+                           SessNr == 2 & StimCond == 0 ~ 1))
+}
+```
+
+2.  **Carry out analyses not done in HLM**
+
+Some variable settings
+
+```{r}
+df$ID <- as.numeric(df$ID)
+df$cDiff <- as.numeric(df$cDiff)
+df$RewM <- as.numeric(df$RewM)
+df$Food <- as.numeric(df$Food)
+df$StimCond <- as.numeric(df$StimCond)
+df$S_InvSlope <- as.numeric(df$S_InvSlope)
+df$RelFreq <- as.numeric(df$RelFreq)
+```
+
+**Correlation: invigoration x effort maintenance**
+
+```{r}
+cor_df <- df %>% drop_na(S_InvSlope) # NA in invig slope for 40 rows for Leiden dat
+
+r_val <- cor(cor_df$RelFreq, cor_df$S_InvSlope, method = "pearson")
+conf_interval_cor <- CIr(r=r_val, n = length(cor_df$S_InvSlope), level = .95)
+
+print(paste('correlation between inv and effort maintenance is r = ', round(r_val,3), ' CI = ', '[', round(conf_interval_cor[1], 2), ', ', round(conf_interval_cor[2], 2), ']', sep=''))
+
+
+```
+
+tion_data %\>% filter(SessNr == 2) %\>% pull(S_InvSlope)
+
+)
+
+\# create scatter plot with regression line
+
+ggplot(clean_invigoration_data, aes(x = S_InvSlope, y = S_InvSlope, color = SessNr)) +
+
+geom_point(data = sess1_data, aes(x = S_InvSlope, y = S_InvSlope), size = 3) +
+
+geom_point(data = sess2_data, aes(x = S_InvSlope, y = S_InvSlope), size = 3) +
+
+stat_smooth(method = "lm", formula = y \~ x, se = FALSE) +
+
+ggtitle(paste("Correlation:", round(correlation, 2)))
+
+```{r}
+# First, create a subset of the data with only the invigoration scores and participant IDs
+invigoration_data <- df[, c("ID", "SessNr", "S_InvSlope")]
+invigoration_data$SessNr <- as.factor(invigoration_data$SessNr)
+invigoration_data$S_InvSlope <- as.numeric(invigoration_data$S_InvSlope)
+
+
+agg_inv = describeBy(S_InvSlope ~ SessNr + ID, data = invigoration_data, mat = TRUE)
+
+
+
+# calculate correlation coefficient
+correlation <- cor(
+  agg_inv %>% filter(group1 == 1) %>% pull(mean),
+  agg_inv %>% filter(group1 == 2) %>% pull(mean)
+)
+
+
+
+# filter data for SessNr == 1 and SessNr == 2
+sess1_data <- agg_inv %>% filter(group1 == 1)
+sess2_data <- agg_inv %>% filter(group1 == 2)
+
+# calculate correlation between S_InvSlope for SessNr == 1 and SessNr == 2
+correlation <- cor(sess1_data$mean, sess2_data$mean)
+
+ggplot(data = data.frame(x = sess1_data$mean, y = sess2_data$mean), aes(x = x, y = y)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  xlab("SessNr 1") +
+  ylab("SessNr 2") + mytheme + 
+  ggtitle(paste("Pearson correlation:", round(cor(sess1_data$mean, sess2_data$mean), 2)))
+
+
+```
+
+```{r}
+# First, create a subset of the data with only the invigoration scores and participant IDs
+RelFreq_data <- df[, c("ID", "SessNr", "RelFreq")]
+RelFreq_data$SessNr <- as.factor(RelFreq_data$SessNr)
+RelFreq_data$RelFreq <- as.numeric(RelFreq_data$RelFreq)
+
+
+agg_inv = describeBy(RelFreq ~ SessNr + ID, data = RelFreq_data, mat = TRUE)
+
+
+
+# calculate correlation coefficient
+correlation <- cor(
+  agg_inv %>% filter(group1 == 1) %>% pull(mean),
+  agg_inv %>% filter(group1 == 2) %>% pull(mean)
+)
+
+
+
+# filter data for SessNr == 1 and SessNr == 2
+sess1_data <- agg_inv %>% filter(group1 == 1)
+sess2_data <- agg_inv %>% filter(group1 == 2)
+
+# calculate correlation between S_InvSlope for SessNr == 1 and SessNr == 2
+correlation <- cor(sess1_data$mean, sess2_data$mean)
+
+ggplot(data = data.frame(x = sess1_data$mean, y = sess2_data$mean), aes(x = x, y = y)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  xlab("SessNr 1") +
+  ylab("SessNr 2") + mytheme + 
+  ggtitle(paste("Pearson correlation:", round(cor(sess1_data$mean, sess2_data$mean), 2)))
+
+```
+
+```{r}
+
+```
+
+## Mixed models: lmerTest
+
+(code received from Nils on 06/10/2022)
+
+```{r}
+ave_subjs_ratings_want <- summarySE(df, measurevar="Rating_want", groupvars=c("ID"))
+
+sums_want <- sapply(ave_subjs_ratings_want, mean, na.rm=TRUE)
+paste('average wanting rating: ', sums_want[3], sep = '')
+
+```
+
+```{r}
+ave_subjs_ratings_ex <- summarySE(df, measurevar="Rating_exh", groupvars=c("ID"))
+
+sums_ex <- sapply(ave_subjs_ratings_ex, mean, na.rm=TRUE)
+paste('average exertion rating: ', sums_ex[3], sep = '')
+```
+
+```{r}
+
+## preparing dataset for plotting later (checking the ratings distributions!)
+if (dataset_ana == 'Leiden_repl') {
+  df_subjs_vars <- list()
+  df_subjs_vars$leiden_wanting <- scale(df$Rating_want)
+  df_subjs_vars$leiden_exertion <- scale(df$Rating_exh)
+  #$SessNr <- df$SessNr 
+  df_subjs_vars <- as.data.frame(df_subjs_vars)
+  
+  df_subjs_vars_leiden = tidyr::gather(df_subjs_vars, value=Val, key=Names, leiden_wanting:leiden_exertion, factor_key=TRUE)
+} else if (dataset_ana == 'Neuser_orig') {
+  df_subjs_vars <- list()
+  df_subjs_vars$neuser_wanting <- scale(df_neuser$Rating_want)
+  df_subjs_vars$neuser_exertion <- scale(df_neuser$Rating_exh)
+  
+  df_subjs_vars <- as.data.frame(df_subjs_vars)
+  
+  df_subjs_vars_neuser = tidyr::gather(df_subjs_vars, value=Val, key=Names, neuser_wanting:neuser_exertion, factor_key=TRUE) 
+}
+```
+
+PREP for mixed models
+
+```{r}
+
+# center variables
+df$cRate_W <- df$Rating_want - mean(df$Rating_want)
+df$cRate_E <- df$Rating_exh  - mean(df$Rating_exh)
+
+```
+
+Note that these lmer models don't reach convergence. Checked with original data from Neuser et al., and results are inline with the way these ran
+
+```{r}
+if (dataset_ana == 'Leiden_repl') {
+  
+  # remove 50 responses for Leiden dataset (see paper for explanation)
+  df_clean = subset(df, Rating_want != 50.000000)
+  df_clean = subset(df_clean, Rating_exh != 50.000000)
+  
+  df_clean$USE_cRate_W <- df_clean$Rating_want - mean(df_clean$Rating_want)
+  df_clean$USE_cRate_E <- df_clean$Rating_exh  - mean(df_clean$Rating_exh)
+  fm1 <-lmerTest::lmer(S_InvSlope ~ USE_cRate_W + USE_cRate_E + (USE_cRate_E + USE_cRate_E | ID), df_clean)
+  summary(fm1)
+  fm1_sum <- summary(fm1)
+  
+  options(scipen=999)
+} else if (dataset_ana == 'Neuser_orig') {
+  # center variables
+  df$cRate_W <- df$Rating_want - mean(df$Rating_want)
+  df$cRate_E <- df$Rating_exh  - mean(df$Rating_exh)
+  fm1 <-lmerTest::lmer(S_InvSlope ~ cRate_W + cRate_E + (USE_cRate_E + cRate_E | ID), df)
+  summary(fm1)
+  fm1_sum <- summary(fm1)
+  
+  options(scipen=999)
+}
+
+```
+
+```{r}
+
+```
+
+Predicting effort maintenance \~ wanting and exertion (same convergence issue as above)
+
+long_indiv_betas_refreq = tidyr::gather(indiv_betas_refreq, value=beta, key=Condition, cRate_W:cRate_E, factor_key=TRUE)
+
+```{r}
+if (dataset_ana == 'Leiden_repl') {
+
+  fm2 <- lmerTest::lmer(RelFreq ~ USE_cRate_W + USE_cRate_E + (USE_cRate_W + USE_cRate_E | ID), df_clean)
+  summary(fm2)
+  fm2_sum <- summary(fm2)
+} else if (dataset_ana == 'Neuser_orig') {
+  
+  fm2 <- lmerTest::lmer(RelFreq ~ cRate_W + cRate_E + (cRate_W + cRate_E | ID), df)
+  summary(fm2)
+  fm2_sum <- summary(fm2)
+}
+
+```
+
+```{}
+```
+
+```{}
+```
+
+(Response to Nils Oct 2022): Check EFFECT SIZE of Reward magnitude effect
+
+-   collapse across RewM and run cohensd on paired data
+
+```{r}
+if (dataset_ana == 'Neuser_orig') {
+left_side <- subset(df, StimSide == 0)
+right_side <- subset(df, StimSide == 1)
+ave_RewM_inv <- summarySE(right_side, measurevar="S_InvSlope", na.rm = TRUE, groupvars=c("ID", "RewM"))
+ave_RewM_relfreq<- summarySE(right_side, measurevar="RelFreq", na.rm = TRUE, groupvars=c("ID", "RewM"))
+inv <- cohensD(S_InvSlope ~ RewM,
+       data   = ave_RewM_inv,
+       method = "paired")
+relfreq <- cohensD(RelFreq ~ RewM,
+       data   = ave_RewM_relfreq,
+       method = "paired")
+}
+```
+
+Run the robust regression for plot 5a (on group level)
+
+```{r}
+if (dataset_ana == 'Leiden_repl') {
+ave_data_fig5a <- aggregate(cbind(S_InvSlope, Rating_want)
+                             ~ ID + StimCond + Food, data = df, FUN = function(x) c(mn = mean(x) ) )
+}
+if (dataset_ana == 'Neuser_orig') {
+ave_data_fig5a <- aggregate(cbind(S_InvSlope, Rating_want)
+                             ~ ID + StimCond + Food + StimSide, data = df, FUN = function(x) c(mn = mean(x) ) )
+}
+
+#rmodel <- robustbase::lmrob(S_InvSlope ~ Rating_want + attraction, data = ave_data_fig5a)
+
+```
+
+## Plot data
+
+```{r}
+mytheme <- theme(panel.grid.major = element_blank(), 
+                 panel.grid.minor = element_blank(),
+                 panel.background = element_blank(), 
+                 axis.line = element_line(size=0.8, colour = "black"),
+                 text = element_text(size=16,colour = "black"),
+                 strip.background = element_blank())
+```
+
+plot settings:
+
+```{r}
+# recode the variable names: for plotting only
+df <- df %>%
+  mutate(RewM = case_when(RewM == 1 ~ 'High',
+                          RewM == 0 ~ 'Low'))
+
+df <- df %>%
+  mutate(StimCond = case_when(StimCond == 0 ~ 'Sham',
+                             StimCond == 1 ~ 'taVNS'))
+df <- df %>%
+  mutate(Food = case_when(Food == 0 ~ 'Money',
+                          Food == 1 ~ 'Food'))
+df <- df %>%
+  mutate(cDiff = case_when(cDiff == 0 ~ 'Easy',
+                           cDiff == 1 ~ 'Hard'))
+
+df <- df %>%
+  mutate(Order = case_when(Order == 1 ~ 'tVNS>sham',
+                           Order == 0 ~ 'sham>tVNS'))
+
+df$StimCond <- as.factor(df$StimCond)
+df$Order <- as.factor(df$Order)
+df$Food <- as.factor(df$Food)
+df$SessNr <- as.factor(df$SessNr)
+
+if (dataset_ana == 'Neuser_orig'){
+  df <- df %>%
+  mutate(StimSide = case_when(StimSide == 1 ~ 'Right ear',
+                           StimSide == 0 ~ 'Left ear'))
+  df$StimSide <- as.factor(df$StimSide)
+}
+```
+
+==note: according to Neuser et al. all plots show averages across conditions and across session (so each participant has two points inside each bar)
+
+**Settings for Figure 2 a-d**
+
+```{r}
+ave_data_fig2a <- summarySE(df, measurevar="S_InvSlope", groupvars=c("cDiff","RewM", "ID", "StimCond"))
+ave_data_fig2b <- summarySE(df, measurevar="RelFreq", groupvars=c("cDiff","RewM", "ID", "StimCond"))
+ave_data_fig2c <- summarySE(df, measurevar="S_InvSlope", groupvars=c("Food","RewM", "ID", "StimCond"))
+ave_data_fig2d <- summarySE(df, measurevar="RelFreq", groupvars=c("Food","RewM", "ID", "StimCond"))
+
+```
+
+**Make Figure 2 a-d**
+
+```{r}
+require(gridExtra)
+plot_A <- qplot(1)
+plot_B <- qplot(1)
+plot_C <- qplot(1)
+plot_D <- qplot(1)
+
+
+data=ave_data_fig2a[ave_data_fig2a$ID %in% c('103', '106'),]
+# Fig 2. a)
+
+plot_A <- ave_data_fig2a %>%
+  mutate(RewM = fct_relevel(RewM,"Low", "High")) %>%
+  ggplot(aes(x = cDiff, y = S_InvSlope, fill = RewM)) +
+  geom_bar(stat='summary', position='dodge', alpha=0.9) +
+  geom_point(size = 0.5, position = position_jitterdodge(jitter.width = 0.2,
+                                             dodge.width = 0.9), alpha= 0.5, color = 'grey') +
+  stat_summary(fun.data=mean_cl_normal,colour = "black", width=0.2,size = 0.8,geom = "errorbar", alpha=1, position=position_dodge(width=0.9)) +
+  scale_fill_manual(values = c("#fe9929", "#2c7fb8")) +
+  mytheme +
+  guides(fill=guide_legend(title='Reward\nmagnitude')) +
+  labs(title = "", x = "Difficulty", y = "Invigoration slope[%/s]") +
+  scale_y_continuous(expand = c(0, 0))
+
+# Fig 2. b)
+
+plot_B <- ave_data_fig2b %>%
+  mutate(RewM = fct_relevel(RewM,"Low", "High")) %>%
+  ggplot(aes(x = cDiff, y = RelFreq, fill = RewM)) +
+  geom_bar(stat='summary', position='dodge', alpha=0.9) +
+  geom_point(size = 0.5,position = position_jitterdodge(jitter.width = 0.2,
+                                             dodge.width = 0.9), alpha= 0.5, color = 'grey') +
+  stat_summary(fun.data=mean_cl_normal,colour = "black", width=0.2,size = 0.8,geom = "errorbar", alpha=1, position=position_dodge(width=0.9)) +
+  guides(fill=guide_legend(title='Reward\nmagnitude')) +
+  scale_fill_manual(values = c("#fe9929", "#2c7fb8")) +
+  mytheme   +     
+  labs(title = "", x = "Difficulty", y = "Relative frequency[%]")  +
+  scale_y_continuous(expand = c(0, 0))
+
+# Fig 2. c)
+plot_C <- ave_data_fig2c %>%
+  mutate(Food = fct_relevel(Food,"Money", "Food")) %>%
+  mutate(RewM = fct_relevel(RewM,"Low", "High")) %>%
+  ggplot(aes(x = Food, y = S_InvSlope, fill = RewM)) +
+  geom_bar(stat='summary', position='dodge', alpha=0.9) +
+  geom_point(size = 0.5,position = position_jitterdodge(jitter.width = 0.2,
+                                             dodge.width = 0.9), alpha= 0.5, color = 'grey') +
+  stat_summary(fun.data=mean_cl_normal,colour = "black", width=0.2,size = 0.8,geom = "errorbar", alpha=1, position=position_dodge(width=0.9)) +
+  scale_fill_manual(values = c("#fe9929", "#2c7fb8")) +
+  mytheme   +
+  guides(fill=guide_legend(title='Reward\nmagnitude')) +
+  labs(title = "", x = "Reward type", y = "Invigoration Slope [%/s]")+
+  scale_y_continuous(expand = c(0, 0))
+
+# Fig 2. d)
+plot_D <- ave_data_fig2d %>%
+  mutate(Food = fct_relevel(Food,"Money", "Food")) %>%
+  mutate(RewM = fct_relevel(RewM,"Low", "High")) %>%
+  ggplot(aes(x = Food, y = RelFreq, fill = RewM)) +
+  geom_bar(stat='summary', position='dodge', alpha=0.9) +
+  geom_point(size = 0.5,position = position_jitterdodge(jitter.width = 0.2,
+                                             dodge.width = 0.9), alpha= 0.5, color = 'grey') +
+  stat_summary(fun.data=mean_cl_normal,colour = "black", width=0.2,size = 0.8,geom = "errorbar", alpha=1, position=position_dodge(width=0.9)) +
+  guides(fill=guide_legend(title='Reward\nmagnitude')) +
+  scale_fill_manual(values = c("#fe9929", "#2c7fb8")) +
+  mytheme                 +                                 
+  labs(title = "", x = "Reward type", y =  "Relative frequency[%]")+
+  scale_y_continuous(expand = c(0, 0))
+
+# Combine plots in one figure
+plt_fig2 <- grid.arrange(plot_A, plot_B, plot_C, plot_D, nrow=2, ncol=2)
+  labs(title = "Main effects of task conditions")
+plt_fig2
+
+#ggsave(path = fig_path, filename = "Fig_2abcd.pdf", plot=plt_fig2,  width = 8, height =8)
+
+```
+
+**Settings for Figure 2e**
+
+```{r}
+var_name <- c('Exertion invig', 'Exertion maintenance', 'Wanting invig', 'Wanting maintenance')
+coeffs <- c(fm1_sum$coefficients[3], fm2_sum$coefficients[3], fm1_sum$coefficients[2], fm2_sum$coefficients[2])
+min_err <- c(fm1_sum$coefficients[6], fm2_sum$coefficients[6], fm1_sum$coefficients[5], fm2_sum$coefficients[5])
+# create dummy data
+data_plot2e <- data.frame(
+  name=var_name,
+  value=coeffs,
+  sem=min_err
+)
+
+```
+
+```{r}
+fig2e <- ggplot(data_plot2e) +
+  geom_bar( aes(x=name, y=value), stat="identity", fill="skyblue", alpha=0.5) +
+  geom_linerange( aes(x=name, ymin=value-sem, ymax=value+sem), colour="black", alpha=0.9, size=0.8) + mytheme
+
+ggsave(path = fig_path, filename = "Fig_2e.pdf", plot=fig2e,  width = 6, height =4)
+```
+
+**Settings for Figure 3 a-d**
+
+```{r}
+# make average per subj, per condition of: Inv_slope and Rel_freq
+if (dataset_ana == 'Neuser_orig'){
+  ave_data_fig3a <- summarySE(df, measurevar="S_InvSlope", groupvars=c("Food","StimCond", "ID", "StimSide"))
+  ave_data_fig3b <- summarySE(df, measurevar="RelFreq", groupvars=c("Food","StimCond", "ID", "StimSide"))
+  
+} else if ( dataset_ana == 'Leiden_repl') {
+  ave_data_fig3a <- summarySE(df, measurevar="S_InvSlope", groupvars=c("Food","StimCond", "ID"))
+  ave_data_fig3b <- summarySE(df, measurevar="RelFreq", groupvars=c("Food","StimCond", "ID"))
+}
+
+```
+
+**Make Figure 3 a-b**
+
+```{r}
+
+## Plotting data: Figure 3.
+require(gridExtra)
+Fig3a <- qplot(1)
+Fig3b <-qplot(1)
+
+Fig3a <- ave_data_fig3a %>%
+  mutate(Food = fct_relevel(Food,"Money", "Food")) %>%
+  mutate(StimCond = fct_relevel(StimCond,"Sham", "taVNS")) %>%
+  ggplot(aes(x = Food, y = S_InvSlope, fill = StimCond)) +
+  geom_bar(stat='summary', position='dodge', alpha=0.9) +
+  geom_point(size = 0.5,position = position_jitterdodge(jitter.width = 0.2,
+                                             dodge.width = 0.9),alpha= 0.5, color = 'grey') +
+  stat_summary(fun.data=mean_cl_normal,colour = "black", width=0.2,size = 0.8,geom="errorbar", alpha=1, position=position_dodge(width=0.9)) +
+  guides(fill=guide_legend(title='Stim')) +
+  scale_fill_manual(values = c("#FF6347", "#66CDAA")) +
+  mytheme +
+  labs(title = "Invigoration", x = "Reward type", y = "Invigoration Slope [%/s]")  +
+  scale_y_continuous(expand = c(0, 0))
+
+
+Fig3b <- ave_data_fig3b %>%
+  mutate(Food = fct_relevel(Food,"Money", "Food")) %>%
+  mutate(StimCond = fct_relevel(StimCond,"Sham", "taVNS")) %>%
+  ggplot(aes(x = Food, y = RelFreq, fill = StimCond)) +
+  geom_bar(stat='summary', position='dodge', alpha=0.9) +
+  geom_point(size = 0.5,position = position_jitterdodge(jitter.width = 0.2,
+                                             dodge.width = 0.9),alpha= 0.5, color = 'grey') +
+  stat_summary(fun.data=mean_cl_normal,colour = "black", width=0.2,size = 0.8,geom = "errorbar", alpha=1, position=position_dodge(width=0.9)) +
+  guides(fill=guide_legend(title='Stim')) +
+  scale_fill_manual(values = c("#FF6347", "#66CDAA")) +
+  mytheme                 +                                 
+  labs(title = "Maintenance", x = "Reward type", y = "Relative frequency [%]")+
+  scale_y_continuous(expand = c(0, 0))
+
+if (dataset_ana == 'Neuser_orig'){
+  Fig3a <- Fig3a + facet_wrap(~StimSide)
+  Fig3b <- Fig3b + facet_wrap(~StimSide)
+}
+# Combine plots in one figure
+plt_fig3 <- grid.arrange(Fig3a, Fig3b, nrow=1, ncol=2) 
+
+#ggsave(path = fig_path, filename = "Fig_3ab.pdf", plot=plt_fig3,  width = 8, height =4)
+```
+
+**Settings Figure 4** (make long-data format from resfil2 files)
+
+Invigoration
+
+```{r}
+if (dataset_ana == 'Neuser_orig'){
+  Inv_slope_resfil <- haven::read_sav(paste(home_path, 'Neuser_orig_dat', 'HLM', 'Invigoration', "Inv_slope_resfil2.sav", sep='/'))
+} else if (dataset_ana == 'Leiden_repl') {
+    Inv_slope_resfil <- haven::read_sav(paste(home_path, '20221004', 'HLM', 'Invigoration', "Inv_slope_resfil2.sav", sep='/'))
+}
+
+Inv_slope_resfil = as.data.frame(Inv_slope_resfil)
+Inv_slope_resfil <- Inv_slope_resfil %>% 
+  rename(ID = L2ID,
+         Stimulation = ECSTIMCOND,
+         SxDiff = ECI_SDIFF,
+         SxRewM = ECI_SREWM,
+         SxFood = ECI_SFOOD,
+         SxDiffxRewM = ECI_SDRM)
+
+# make long df 
+labels = names(Inv_slope_resfil)
+# Select variables
+var_names = c("ID",
+              "Stimulation",
+              "SxDiff", 
+              "SxRewM", 
+              "SxFood", 
+              "SxDiffxRewM")
+
+Inv_slope_resfil = Inv_slope_resfil[,match(var_names,labels)]
+Inv_slope_resfil = data.frame(Inv_slope_resfil)
+Inv_slope_resfil = tidyr::gather(Inv_slope_resfil, value=Val, key=Names, Stimulation:SxDiffxRewM, factor_key=TRUE)
+names(Inv_slope_resfil)[names(Inv_slope_resfil) == 'Names'] <- 'Cond'
+names(Inv_slope_resfil)[names(Inv_slope_resfil) == 'Val'] <- 'Val'
+
+# for Leiden repl
+inv_stimcond_p = 'p = 0.621'
+inv_sdiff = '0.058'
+```
+
+Maintenance
+
+```{r}
+if (dataset_ana == 'Neuser_orig'){
+  Relfreq_resfil <- haven::read_sav(paste(home_path,'Neuser_orig_dat', 'HLM', 'Maintenance', "Rel_freq_resfil2.sav", sep='/'))
+} else if (dataset_ana == 'Leiden_repl') {
+    Relfreq_resfil <- haven::read_sav(paste(home_path, '20221004', 'HLM', 'Maintenance', "Rel_freq_resfil2.sav", sep='/'))
+}
+
+Relfreq_resfil = as.data.frame(Relfreq_resfil)
+Relfreq_resfil <- Relfreq_resfil %>% 
+  rename(ID = L2ID,
+         Stimulation = ECSTIMCOND,
+         SxDiff = ECI_SDIFF,
+         SxRewM = ECI_SREWM,
+         SxFood = ECI_SFOOD,
+         SxDiffxRewM = ECI_SDRM)
+
+# make long df 
+labels = names(Relfreq_resfil)
+# Select variables
+var_names = c("ID",
+              "Stimulation",
+              "SxDiff", 
+              "SxRewM", 
+              "SxFood", 
+              "SxDiffxRewM")
+
+Relfreq_resfil = Relfreq_resfil[,match(var_names,labels)]
+Relfreq_resfil = data.frame(Relfreq_resfil)
+Relfreq_resfil = tidyr::gather(Relfreq_resfil, value=Val, key=Names, Stimulation:SxDiffxRewM, factor_key=TRUE)
+names(Relfreq_resfil)[names(Relfreq_resfil) == 'Names'] <- 'Cond'
+names(Relfreq_resfil)[names(Relfreq_resfil) == 'Val'] <- 'Val'
+
+# for Leiden repl
+#rel_stimcond_p = 'p = 0.500'
+```
+
+**Make Figure 4**
+
+```{r}
+dens_plt_Inv <- Inv_slope_resfil %>%
+  mutate(Cond = fct_relevel(Cond,"SxDiffxRewM", "SxFood", "SxRewM", "SxDiff", "Stimulation")) %>%
+  ggplot(aes(x = Val, y = Cond, fill = Cond)) + geom_density_ridges(
+  jittered_points = TRUE, position = "raincloud",
+  alpha = 0.7, scale = 0.6) + mytheme  + theme(legend.position="None") + theme(axis.line=element_blank())+
+  geom_vline(xintercept = 0, linetype="dotted", 
+             color = "red", size=0.5) + xlim(-25, 25) + 
+  labs(title = "Invigoration", x = "taVNS-induced changes", y = "Density of taVNS-induced changes")
+
+
+dens_plt_maint <- Relfreq_resfil %>%
+  mutate(Cond = fct_relevel(Cond,"SxDiffxRewM", "SxFood", "SxRewM", "SxDiff", "Stimulation")) %>%
+  ggplot(aes(x = Val, y = Cond, fill = Cond)) + geom_density_ridges(
+    jittered_points = TRUE, position = "raincloud",
+    alpha = 0.7, scale = 0.6) + mytheme  + theme(legend.position="None") + theme(axis.line=element_blank())+
+  geom_vline(xintercept = 0, linetype="dotted", 
+             color = "red", size=0.5) +  xlim(-25, 25) + 
+  labs(title = "Maintenance", x = "taVNS-induced changes", y = "Density of taVNS-induced changes") 
+
+if (dataset_ana == 'Leiden_repl') {
+  dens_plt_Inv <- dens_plt_Inv + annotate("text", x=10, y=5.5, size = 3, label= inv_stimcond_p)
+  dens_plt_maint <- dens_plt_maint + annotate("text", x=10, y=5.5, size = 3, label= rel_stimcond_p)
+}
+
+plt_fig4 <- grid.arrange(dens_plt_Inv, dens_plt_maint, nrow=1, ncol=2) 
+
+#ggsave(path = fig_path, filename = "Fig_4.pdf", plot=plt_fig4,  width = 8, height =4)
+```
+
+**Settings figure 5a: run robust regression on group level**
+
+```{r}
+if (dataset_ana == 'Leiden_repl') {
+ave_data_fig5a <- aggregate(cbind(S_InvSlope, Rating_want)
+                             ~ ID + StimCond + Food, data = df, FUN = function(x) c(mn = mean(x) ) )
+}
+if (dataset_ana == 'Neuser_orig') {
+ave_data_fig5a <- aggregate(cbind(S_InvSlope, Rating_want)
+                             ~ ID + StimCond + Food + StimSide, data = df, FUN = function(x) c(mn = mean(x) ) )
+}
+
+# robust regression
+rmodel <- robustbase::lmrob(S_InvSlope ~ Rating_want, data = ave_data_fig5a)
+```
+
+**Make Figure 5a-b --\> not included in manuscript**
+
+```{r}
+if (dataset_ana == 'Neuser_orig') {
+  
+Fig5a <- ggplot(data = df, aes(x=Rating_want, y=S_InvSlope)) +
+  #geom_point() +
+  stat_density_2d(aes(fill = stat(level)), geom = "polygon",  bins = 8) +
+  geom_smooth(aes(group=StimCond, color = StimCond), method=rlm, se = TRUE) + 
+  scale_color_manual(values = c("#FF6347", "#66CDAA")) + 
+  mytheme + 
+  labs(title = "", x = "Wanting [VAS]", y = "Invigoration Slope [%/s]") +
+  facet_wrap(~Food + StimSide , ncol=2, nrow=2) +
+  theme(legend.position = "none") +
+  scale_fill_viridis(option = "A") + 
+  ylim(20, 80) + xlim(0, 100)
+
+
+} else if (dataset_ana == 'Leiden_repl') {
+Fig5a <- ggplot(data = df, aes(x=Rating_want, y=S_InvSlope)) +
+  #geom_point() +
+  stat_density_2d(aes(fill = stat(level)), geom = "polygon",  bins = 8) +
+  geom_smooth(aes(group=StimCond, color = StimCond), method=rlm, se = TRUE) + 
+  scale_color_manual(values = c("#FF6347", "#66CDAA")) + 
+  mytheme + 
+  labs(title = "", x = "Wanting [VAS]", y = "Invigoration Slope [%/s]") +
+  facet_wrap(~Food, ncol=2, nrow=1) +
+  theme(legend.position = "none") +
+  scale_fill_viridis(option = "A")+ 
+  ylim(20, 80) + xlim(0, 100)
+}
+# Fig5b <- ggplot(data = ave_data_fig5b, aes(x=R_Exh, y=S_InvSlope, color=StimCond)) +
+#   stat_density_2d(geom = "polygon", alpha=0.2) +
+#   geom_smooth(method=lm) + 
+#   mytheme + 
+#   labs(title = "", x = "Exertion [VAS]", y = "Invigoration Slope [%/s]") +
+#   facet_wrap(~Food, ncol=1, nrow=2)
+
+# Fig5b <- ggplot(data = ave_data_fig5b, aes(x=Rating_exh, y=S_InvSlope)) +
+#   stat_density_2d(aes(fill = stat(level)), geom = "polygon") +
+#   geom_smooth(aes(group=StimCond, color = StimCond), method=lm, se = FALSE) + 
+#   scale_color_manual(values = c("#FF6347", "#66CDAA")) + 
+#   mytheme + 
+#   labs(title = "", x = "Exertion [VAS]", y = "Invigoration Slope [%/s]") +
+#   facet_wrap(~Food, ncol=1, nrow=2) +
+#   theme(legend.position = "none") +
+#   scale_fill_viridis(option = "A") 
+Fig5a
+#ggsave(path = fig_path, filename = "Fig_5.pdf", plot=Fig5a,  width = 6, height =6)
+```
+
+Extra plots looking at the subjective ratings (included in text in methods section)
+
+```{r}
+
+total_subjective <- rbind(df_subjs_vars_neuser , df_subjs_vars_leiden)
+total_subjective$Names <- as.factor(total_subjective$Names)
+total_subjective$Val <- as.numeric(total_subjective$Val)
+plot_A <- total_subjective %>%
+    mutate(Names = fct_relevel(Names,"leiden_exertion", "leiden_wanting", "neuser_exertion", "neuser_wanting")) %>%
+  ggplot(aes(x = Names, y = Val, fill = Names)) +
+  geom_bar(stat='summary', position='dodge', alpha=0.9) +
+  geom_jitter(size = 0.5) +
+  mytheme +
+  guides(fill=guide_legend(title='Subjective ratings')) +
+  labs(title = "", x = "", y = "Rating (trial level)")  
+```
+
+```{r}
+subj_ratings_forest <- total_subjective %>%
+    mutate(Names = fct_relevel(Names,"leiden_exertion", "leiden_wanting", "neuser_exertion", "neuser_wanting")) %>%
+  ggplot(aes(x = Val, y = Names, fill = Names)) + geom_density_ridges(stat = "binline", bins = 40, scale = 1) + mytheme  + theme(legend.position="None") + theme(axis.line=element_blank())+
+  labs(title = "Invigoration", x = "rating", y = "no. trials")
+ggsave(path = fig_path, filename = "subj_ratings_forest.png", plot=subj_ratings_forest,  width = 6, height =6)
+```
+
+Some additional sanity checks!
+
+```{r}
+# check the ranked data!! 
+
+subj_ratings_forest <- total_subjective %>%
+    mutate(Names = fct_relevel(Names,"leiden_exertion", "leiden_wanting", "neuser_exertion", "neuser_wanting")) %>%
+  ggplot(aes(x = Val, y = Names, fill = Names)) + geom_density_ridges(stat = "binline", bins = 40, scale = 1) + mytheme  + theme(legend.position="None") + theme(axis.line=element_blank())+
+  labs(title = "Invigoration", x = "rating", y = "no. trials")
+ggsave(path = fig_path, filename = "subj_ratings_forest.png", plot=subj_ratings_forest,  width = 6, height =6)
+```
+
+```{r}
+subj_ratings_forest <- df_subjs_vars_leiden %>%
+    mutate(Names = fct_relevel(Names,"leiden_exertion", "leiden_wanting")) %>%
+  ggplot(aes(x = Val, y = Names, fill = Names)) + geom_density_ridges(stat = "binline", bins = 40, scale = 1) + mytheme  + theme(legend.position="None") + theme(axis.line=element_blank())+
+  labs(title = "Invigoration", x = "rating", y = "no. trials")
+ggsave(path = fig_path, filename = "subj_ratings_forest.png", plot=subj_ratings_forest,  width = 6, height =6)
+```
+
+```{r}
+# Comparison of VAS between sessions 
+df_subjs_vars$SessNr <- as.factor(df_subjs_vars$SessNr)
+df_subjs_vars <- df_subjs_vars %>%
+  mutate(SessNumber = case_when(SessNr == 1 ~ 'Session1',
+                             SessNr == 2 ~ 'Session2'))
+subj_ratings_session <- df_subjs_vars  %>%
+    mutate(Names = fct_relevel(SessNumber,"Session2", "Session1")) %>%
+  ggplot(aes(x = leiden_wanting, y = SessNumber, fill = SessNr)) + geom_density_ridges(stat = "binline", bins = 40, scale = 1) + mytheme  + theme(legend.position="None") + theme(axis.line=element_blank())+
+  labs(title = "Wanting", x = "rating", y = "no. trials")
+ggsave(path = fig_path, filename = "subj_ratings_split_Sess_wanting.png", plot=subj_ratings_session,  width = 6, height =6)
+```
+
+```{r}
+subj_ratings_session_exertion <- df_subjs_vars  %>%
+    mutate(Names = fct_relevel(SessNumber,"Session2", "Session1")) %>%
+  ggplot(aes(x = leiden_exertion, y = SessNumber, fill = SessNr)) + geom_density_ridges(stat = "binline", bins = 40, scale = 1) + mytheme  + theme(legend.position="None") + theme(axis.line=element_blank())+
+  labs(title = "Exertion", x = "rating", y = "no. trials")
+ggsave(path = fig_path, filename = "subj_ratings_split_Sess.png", plot=subj_ratings_session_exertion,  width = 6, height =6)
+```
+
+```{r}
+# make a ploit showing the correlations befween subjective val and invig 
+
+#cor(df$Rating_want, df$S_InvSlope, use="complete.obs")
+
+#a<-plot(df$Rating_want, df$S_InvSlope)
+#ggsave(path = fig_path, filename = "cor_inv_wanting.png", plot=a,  width = 6, height =6)
+
+a <- ggplot(df, aes(x=Rating_want, y=S_InvSlope)) + 
+  geom_point()+
+  geom_smooth(method=lm)
+ggsave(path = fig_path, filename = "cor_inv_wanting.png", plot=a,  width = 6, height =6)
+a
+```
+
+```{r}
+
+b <- ggplot(df, aes(x=Rating_want, y=RelFreq)) + 
+  geom_point()+
+  geom_smooth(method=lm)
+ggsave(path = fig_path, filename = "cor_relfreq_wanting.png", plot=b,  width = 6, height =6)
+b
+```
+
+```{r}
+c <- ggplot(df, aes(x=Rating_exh, y=S_InvSlope)) + 
+  geom_point()+
+  geom_smooth(method=lm)
+c
+ggsave(path = fig_path, filename = "cor_inv_exertion.png", plot=c,  width = 6, height =6)
+```
+
+```{r}
+d <- ggplot(df, aes(x=Rating_exh, y=RelFreq)) + 
+  geom_point()+
+  geom_smooth(method=lm)
+d
+ggsave(path = fig_path, filename = "cor_relfreq_exertion.png", plot=d,  width = 6, height =6)
+```
+
+Runadditional checks on Bayesian analysis with posterior distribution from original study (variables computed using JASP)
+
+```{r}
+# set the median and 95% confidence intervals
+median <- 0.291
+lower <- 0.072
+upper <- 0.511
+
+# set the sample size
+n <- 81
+
+# calculate the standard deviation from the confidence interval
+sd_est <- (upper - lower) / (2 * qnorm(0.975))
+
+# calculate the standard error of the median
+se_median <- sd_est / sqrt(n)
+
+# estimate the normal distribution
+mu_est <- median
+sigma_est <- sd_est / qnorm(0.75)
+
+# calculate the standard error of the estimated standard deviation
+se_sigma <- sd_est / (qnorm(0.75) * sqrt(2 * (n - 1)))
+
+# print the estimated parameters of the normal distribution
+cat("Estimated parameters of the normal distribution:\n")
+cat("mu = ", mu_est, "\n")
+cat("sigma = ", sigma_est, "\n")
+
+# print the standard errors of the estimates
+cat("Standard error of the median = ", se_median, "\n")
+cat("Standard error of the estimated standard deviation = ", se_sigma, "\n")
+```
