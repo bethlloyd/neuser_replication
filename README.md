@@ -5,6 +5,8 @@
 Data input into this script is done after preprocessing (those scripts received from authors of original study)
 Processes the behavioural data and runs all analyses, plots data from all figures in paper (plus some extra). Only Figure 4 was taken from JASP
 
+Additional file includes the English task instructions used for the current replication study.
+
 For any questions, please contact: b.lloyd@fsw.leidenuniv.nl
 
 
